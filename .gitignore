@@ -1,0 +1,14 @@
+.venv
+./otto_files
+
+# Ignore Python cache files
+__pycache__/
+*.py[cod]
+
+# Ignore virtual environment directories
+env/
+venv/
+.venv/
+
+# Ignore pickle files
+*.pkl

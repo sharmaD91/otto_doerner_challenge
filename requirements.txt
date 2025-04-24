@@ -1,5 +1,9 @@
+streamlit
 pandas
-numpy
+matplotlib
+plotly
 scikit-learn
 xgboost
 openpyxl>=3.0.10
+holidays
+fpdf
