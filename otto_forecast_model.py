@@ -5,12 +5,17 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder
 from sklearn.multioutput import MultiOutputRegressor
 from xgboost import XGBRegressor
+from sklearn.ensemble import RandomForestRegressor
 import holidays
+import re
 
 class OttoForecaster:
-    def __init__(self):
+    def __init__(self, model_type="random_forest"):
+        self.model_type = model_type
         self.model = None
         self.label_encoder = None
+        self.all_containers = None
+        self.difference_flag = False
 
     def load_and_prepare_data(self, files):
         try:
@@ -32,15 +37,33 @@ class OttoForecaster:
 
             df = pd.concat(dfs, ignore_index=True)
             df['LiefDatum'] = pd.to_datetime(df['LiefDatum'], format='%d.%m.%Y', errors='coerce')
+            df['difference'] = df['CHAnz'] - df['CSAnz']
             df.to_pickle('otto_files/combined_df.pkl')
             return df
 
-    def train_model(self, df):
+    def train_model(self, df, containers):
         german_holidays = holidays.Germany()
 
-        total = df.groupby(['LiefDatum', 'DspZenKz'])['CSAnz'].sum().reset_index(name='total_containers')
-        container_M = df[df['DspGrpKz'] == 'M'].groupby(['LiefDatum', 'DspZenKz'])['CSAnz'].sum().reset_index(name='container_M')
-        container_C = df[df['DspGrpKz'] == 'C'].groupby(['LiefDatum', 'DspZenKz'])['CSAnz'].sum().reset_index(name='container_C')
+        df['ConTyp'] = [contyp[:4] if re.match(r'[a-zA-Z]', contyp[1]) else contyp[:3] for contyp in df['ConTyp']]
+        self.all_containers = list(dict.fromkeys([contyp for contyp in df['ConTyp'] if '-' not in contyp]))
+        
+        if containers=="pick":
+            data_selection = 'CSAnz'
+        elif containers=="put":
+            data_selection = 'CHAnz'
+        elif containers=="difference":
+            data_selection = 'difference'
+            self.difference_flag = True
+        else:
+            raise ValueError("Invalid container type. Choose 'pick', 'put', or 'difference'.")
+        total = df.groupby(['LiefDatum', 'DspZenKz'])[data_selection].sum().reset_index(name='total_containers')
+        containers = np.empty(len(self.all_containers), dtype=object)
+        for cont in range(len(self.all_containers)):
+            containers[cont] = df[df['ConTyp'] == self.all_containers[cont]].groupby(['LiefDatum', 'DspZenKz'])[data_selection].sum().reset_index(name=self.all_containers[cont])
+            total = total.merge(containers[cont], on=['LiefDatum', 'DspZenKz'], how='left')
+
+        container_M = df[df['DspGrpKz'] == 'M'].groupby(['LiefDatum', 'DspZenKz'])[data_selection].sum().reset_index(name='container_M')
+        container_C = df[df['DspGrpKz'] == 'C'].groupby(['LiefDatum', 'DspZenKz'])[data_selection].sum().reset_index(name='container_C')
 
         df_grouped = total.merge(container_M, on=['LiefDatum', 'DspZenKz'], how='left') \
                              .merge(container_C, on=['LiefDatum', 'DspZenKz'], how='left')
@@ -49,6 +72,8 @@ class OttoForecaster:
         df_grouped.rename(columns={'LiefDatum': 'date', 'DspZenKz': 'location'}, inplace=True)
         df_grouped['container_M'] = df_grouped['container_M'].astype(int)
         df_grouped['container_C'] = df_grouped['container_C'].astype(int)
+        for cont in self.all_containers:
+            df_grouped[cont] = df_grouped[cont].astype(int)
 
         df_grouped['dayofweek'] = df_grouped['date'].dt.dayofweek
         df_grouped['day'] = df_grouped['date'].dt.day
@@ -65,11 +90,16 @@ class OttoForecaster:
         df_grouped['location_encoded'] = self.label_encoder.fit_transform(df_grouped['location'])
 
         X = df_grouped[['dayofweek', 'day', 'month', 'year', 'dayofyear', 'weekofyear', 'location_encoded']]
-        y = df_grouped[['container_M', 'container_C']]
+        y = df_grouped[self.all_containers + ['container_M', 'container_C']]
 
         X_train, X_test, y_train, y_test = train_test_split(X, y, shuffle=False, test_size=0.1)
 
-        self.model = MultiOutputRegressor(XGBRegressor(n_estimators=100, learning_rate=0.1))
+        if self.model_type == "random_forest":
+            self.model = MultiOutputRegressor(RandomForestRegressor(n_estimators=100, random_state=42))
+        elif self.model_type == "xgboost":
+            self.model = MultiOutputRegressor(XGBRegressor(n_estimators=100, learning_rate=0.1))
+        else:
+            raise ValueError("Invalid model type. Choose 'random_forest' or 'xgboost'.")
         self.model.fit(X_train, y_train)
 
     def predict(self, start_date: str, location: str, days: int = 7) -> pd.DataFrame:
@@ -81,7 +111,8 @@ class OttoForecaster:
         predictions = []
         for date in future_dates:
             if date in german_holidays:
-                predictions.append((date, 0, 0))
+                zero_pred = [0] * (len(self.all_containers)+2)
+                predictions.append((date, *zero_pred))
                 continue
 
             features = pd.DataFrame({
@@ -94,6 +125,8 @@ class OttoForecaster:
                 'location_encoded': [location_encoded]
             })
             pred = self.model.predict(features)[0]
-            predictions.append((date, max(0, int(pred[0])), max(0, int(pred[1]))))
+            if not self.difference_flag:
+                pred = [max(0, int(p)) for p in pred]
+            predictions.append((date, *pred))
 
-        return pd.DataFrame(predictions, columns=['date', 'container_M', 'container_C'])
+        return pd.DataFrame(predictions, columns=['date'] + self.all_containers + ['container_M', 'container_C'])
