@@ -58,10 +58,13 @@ class OttoForecaster:
         df_grouped['weekofyear'] = df_grouped['date'].dt.isocalendar().week.astype(int)
         df_grouped['is_holiday'] = df_grouped['date'].isin(german_holidays).astype(int)
 
+        # Exclude holidays from training
+        df_grouped = df_grouped[df_grouped['is_holiday'] == 0]
+
         self.label_encoder = LabelEncoder()
         df_grouped['location_encoded'] = self.label_encoder.fit_transform(df_grouped['location'])
 
-        X = df_grouped[['dayofweek', 'day', 'month', 'year', 'dayofyear', 'weekofyear', 'location_encoded', 'is_holiday']]
+        X = df_grouped[['dayofweek', 'day', 'month', 'year', 'dayofyear', 'weekofyear', 'location_encoded']]
         y = df_grouped[['container_M', 'container_C']]
 
         X_train, X_test, y_train, y_test = train_test_split(X, y, shuffle=False, test_size=0.1)
@@ -77,6 +80,10 @@ class OttoForecaster:
 
         predictions = []
         for date in future_dates:
+            if date in german_holidays:
+                predictions.append((date, 0, 0))
+                continue
+
             features = pd.DataFrame({
                 'dayofweek': [date.dayofweek],
                 'day': [date.day],
@@ -84,8 +91,7 @@ class OttoForecaster:
                 'year': [date.year],
                 'dayofyear': [date.dayofyear],
                 'weekofyear': [date.isocalendar().week],
-                'location_encoded': [location_encoded],
-                'is_holiday': [int(date in german_holidays)]
+                'location_encoded': [location_encoded]
             })
             pred = self.model.predict(features)[0]
             predictions.append((date, max(0, int(pred[0])), max(0, int(pred[1]))))
