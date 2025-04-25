@@ -181,7 +181,7 @@ with st.expander("📋 Forecast Data Table"):
     data_to_style = forecast_data[["date"] + container_selected].copy()
 
     def highlight_holidays(val, date):
-        if val == 0 and date in german_holidays:
+        if date in german_holidays:
             return "background-color: #ffcccc; color: red"
         return ""
 
@@ -189,7 +189,6 @@ with st.expander("📋 Forecast Data Table"):
         lambda col: [highlight_holidays(val, date) if col.name != "date" else "" for val, date in zip(col, data_to_style["date"])],
         axis=0
     )
-
     st.dataframe(styled, use_container_width=True)
 
     holiday_dates = [date.strftime("%Y-%m-%d") for date in forecast_data["date"] if date in german_holidays]
