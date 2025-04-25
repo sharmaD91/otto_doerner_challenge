@@ -7,3 +7,4 @@ xgboost
 openpyxl>=3.0.10
 holidays
 fpdf
+kaleido
