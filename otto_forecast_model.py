@@ -8,6 +8,8 @@ from xgboost import XGBRegressor
 from sklearn.ensemble import RandomForestRegressor
 import holidays
 import re
+import os
+import pickle
 
 class OttoForecaster:
     def __init__(self, model_type="xgboost"):
@@ -23,8 +25,10 @@ class OttoForecaster:
         self.model_type = model_type
 
     def load_and_prepare_data(self, files):
+        if not os.path.exists('cache'):
+            os.makedirs('cache')
         try:
-            df = pd.read_pickle('otto_files/combined_df.pkl')
+            df = pd.read_pickle('cache/combined_df.pkl')
             return df
         except FileNotFoundError:
             dfs = []
@@ -43,69 +47,92 @@ class OttoForecaster:
             df = pd.concat(dfs, ignore_index=True)
             df['LiefDatum'] = pd.to_datetime(df['LiefDatum'], format='%d.%m.%Y', errors='coerce')
             df['difference'] = df['CHAnz'] - df['CSAnz']
-            df.to_pickle('otto_files/combined_df.pkl')
+            df.to_pickle('cache/combined_df.pkl')
             return df
 
-    def train_model(self, df, containers):
-        german_holidays = holidays.Germany()
+    def train_model(self, df, conts):
+        if not os.path.exists('cache'):
+            os.makedirs('cache')
+        if os.path.exists(f'cache/otto_model_{self.model_type}_{conts}.pkl') and \
+            os.path.exists(f'cache/otto_label_encoder_{conts}.pkl') and \
+                os.path.exists(f'cache/otto_all_containers_{conts}.pkl'):
+            with open(f'cache/otto_model_{self.model_type}_{conts}.pkl', 'rb') as f:
+                self.model = pickle.load(f)
 
-        df['ConTyp'] = [contyp[:4] if re.match(r'[a-zA-Z]', contyp[1]) else contyp[:3] for contyp in df['ConTyp']]
-        self.all_containers = list(dict.fromkeys([contyp for contyp in df['ConTyp'] if '-' not in contyp]))
-        
-        if containers=="pick":
-            data_selection = 'CSAnz'
-        elif containers=="put":
-            data_selection = 'CHAnz'
-        elif containers=="difference":
-            data_selection = 'difference'
-            self.difference_flag = True
+            with open(f'cache/otto_label_encoder_{conts}.pkl', 'rb') as f:
+                self.label_encoder = pickle.load(f)
+
+            with open(f'cache/otto_all_containers_{conts}.pkl', 'rb') as f:
+                self.all_containers = pickle.load(f)
         else:
-            raise ValueError("Invalid container type. Choose 'pick', 'put', or 'difference'.")
-        total = df.groupby(['LiefDatum', 'DspZenKz'])[data_selection].sum().reset_index(name='total_containers')
-        containers = np.empty(len(self.all_containers), dtype=object)
-        for cont in range(len(self.all_containers)):
-            containers[cont] = df[df['ConTyp'] == self.all_containers[cont]].groupby(['LiefDatum', 'DspZenKz'])[data_selection].sum().reset_index(name=self.all_containers[cont])
-            total = total.merge(containers[cont], on=['LiefDatum', 'DspZenKz'], how='left')
+            german_holidays = holidays.Germany()
 
-        container_M = df[df['DspGrpKz'] == 'M'].groupby(['LiefDatum', 'DspZenKz'])[data_selection].sum().reset_index(name='container_M')
-        container_C = df[df['DspGrpKz'] == 'C'].groupby(['LiefDatum', 'DspZenKz'])[data_selection].sum().reset_index(name='container_C')
+            df['ConTyp'] = [contyp[:4] if re.match(r'[a-zA-Z]', contyp[1]) else contyp[:3] for contyp in df['ConTyp']]
+            self.all_containers = list(dict.fromkeys([contyp for contyp in df['ConTyp'] if '-' not in contyp]))
+            
+            if conts=="pick":
+                data_selection = 'CSAnz'
+            elif conts=="put":
+                data_selection = 'CHAnz'
+            elif conts=="difference":
+                data_selection = 'difference'
+                self.difference_flag = True
+            else:
+                raise ValueError("Invalid container type. Choose 'pick', 'put', or 'difference'.")
+            total = df.groupby(['LiefDatum', 'DspZenKz'])[data_selection].sum().reset_index(name='total_containers')
+            containers = np.empty(len(self.all_containers), dtype=object)
+            for cont in range(len(self.all_containers)):
+                containers[cont] = df[df['ConTyp'] == self.all_containers[cont]].groupby(['LiefDatum', 'DspZenKz'])[data_selection].sum().reset_index(name=self.all_containers[cont])
+                total = total.merge(containers[cont], on=['LiefDatum', 'DspZenKz'], how='left')
 
-        df_grouped = total.merge(container_M, on=['LiefDatum', 'DspZenKz'], how='left') \
-                             .merge(container_C, on=['LiefDatum', 'DspZenKz'], how='left')
+            container_M = df[df['DspGrpKz'] == 'M'].groupby(['LiefDatum', 'DspZenKz'])[data_selection].sum().reset_index(name='container_M')
+            container_C = df[df['DspGrpKz'] == 'C'].groupby(['LiefDatum', 'DspZenKz'])[data_selection].sum().reset_index(name='container_C')
 
-        df_grouped.fillna(0, inplace=True)
-        df_grouped.rename(columns={'LiefDatum': 'date', 'DspZenKz': 'location'}, inplace=True)
-        df_grouped['container_M'] = df_grouped['container_M'].astype(int)
-        df_grouped['container_C'] = df_grouped['container_C'].astype(int)
-        for cont in self.all_containers:
-            df_grouped[cont] = df_grouped[cont].astype(int)
+            df_grouped = total.merge(container_M, on=['LiefDatum', 'DspZenKz'], how='left') \
+                                .merge(container_C, on=['LiefDatum', 'DspZenKz'], how='left')
 
-        df_grouped['dayofweek'] = df_grouped['date'].dt.dayofweek
-        df_grouped['day'] = df_grouped['date'].dt.day
-        df_grouped['month'] = df_grouped['date'].dt.month
-        df_grouped['year'] = df_grouped['date'].dt.year
-        df_grouped['dayofyear'] = df_grouped['date'].dt.dayofyear
-        df_grouped['weekofyear'] = df_grouped['date'].dt.isocalendar().week.astype(int)
-        df_grouped['is_holiday'] = df_grouped['date'].isin(german_holidays).astype(int)
+            df_grouped.fillna(0, inplace=True)
+            df_grouped.rename(columns={'LiefDatum': 'date', 'DspZenKz': 'location'}, inplace=True)
+            df_grouped['container_M'] = df_grouped['container_M'].astype(int)
+            df_grouped['container_C'] = df_grouped['container_C'].astype(int)
+            for cont in self.all_containers:
+                df_grouped[cont] = df_grouped[cont].astype(int)
 
-        # Exclude holidays from training
-        df_grouped = df_grouped[df_grouped['is_holiday'] == 0]
+            df_grouped['dayofweek'] = df_grouped['date'].dt.dayofweek
+            df_grouped['day'] = df_grouped['date'].dt.day
+            df_grouped['month'] = df_grouped['date'].dt.month
+            df_grouped['year'] = df_grouped['date'].dt.year
+            df_grouped['dayofyear'] = df_grouped['date'].dt.dayofyear
+            df_grouped['weekofyear'] = df_grouped['date'].dt.isocalendar().week.astype(int)
+            df_grouped['is_holiday'] = df_grouped['date'].isin(german_holidays).astype(int)
 
-        self.label_encoder = LabelEncoder()
-        df_grouped['location_encoded'] = self.label_encoder.fit_transform(df_grouped['location'])
+            # Exclude holidays from training
+            df_grouped = df_grouped[df_grouped['is_holiday'] == 0]
 
-        X = df_grouped[['dayofweek', 'day', 'month', 'year', 'dayofyear', 'weekofyear', 'location_encoded']]
-        y = df_grouped[self.all_containers + ['container_M', 'container_C']]
+            self.label_encoder = LabelEncoder()
+            df_grouped['location_encoded'] = self.label_encoder.fit_transform(df_grouped['location'])
 
-        X_train, X_test, y_train, y_test = train_test_split(X, y, shuffle=False, test_size=0.1)
+            X = df_grouped[['dayofweek', 'day', 'month', 'year', 'dayofyear', 'weekofyear', 'location_encoded']]
+            y = df_grouped[self.all_containers + ['container_M', 'container_C']]
 
-        if self.model_type == "random_forest":
-            self.model = MultiOutputRegressor(RandomForestRegressor(n_estimators=100, random_state=42,n_jobs=-1))
-        elif self.model_type == "xgboost":
-            self.model = MultiOutputRegressor(XGBRegressor(n_estimators=100, learning_rate=0.1,n_jobs=4))
-        else:
-            raise ValueError("Invalid model type. Choose 'random_forest' or 'xgboost'.")
-        self.model.fit(X_train, y_train)
+            X_train, X_test, y_train, y_test = train_test_split(X, y, shuffle=False, test_size=0.1)
+
+            if self.model_type == "random_forest":
+                self.model = MultiOutputRegressor(RandomForestRegressor(n_estimators=100, random_state=42,n_jobs=-1))
+            elif self.model_type == "xgboost":
+                self.model = MultiOutputRegressor(XGBRegressor(n_estimators=100, learning_rate=0.1,n_jobs=4))
+            else:
+                raise ValueError("Invalid model type. Choose 'random_forest' or 'xgboost'.")
+            self.model.fit(X_train, y_train)
+
+            
+            with open(f'cache/otto_model_{self.model_type}_{conts}.pkl', 'wb') as f:
+                pickle.dump(self.model, f)
+            with open(f'cache/otto_label_encoder_{conts}.pkl', 'wb') as f:
+                pickle.dump(self.label_encoder, f)
+            with open(f'cache/otto_all_containers_{conts}.pkl', 'wb') as f:
+                pickle.dump(self.all_containers, f)
+
 
     def predict(self, start_date: str, location: str, days: int = 7) -> pd.DataFrame:
         start_date = pd.to_datetime(start_date)
