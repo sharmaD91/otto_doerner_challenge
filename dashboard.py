@@ -17,7 +17,7 @@ logo_url = "https://upload.wikimedia.org/wikipedia/commons/b/b3/Otto_Dörner_Log
 # st.sidebar.markdown(f"<div style='text-align: center;'><img src='{logo_url}' width='180'></div>", unsafe_allow_html=True)
 st.markdown(
     f"""
-    <h1 style='text-align: center; color: #003366;'>🔮 Otto Dörner - Forecast Dashboard</h1>
+    <h1 style='text-align: center; color: #003366;'> Otto Dörner - Forecast Dashboard</h1>
     """,
     unsafe_allow_html=True
 )
@@ -28,19 +28,16 @@ with st.sidebar:
 page = st.sidebar.radio("Select View", ["📈 Forecast - Containers Delivered", "📈 Forecast - Containers Picked Up", "📈 Forecast - Net Containers remaining"])
 
 def create_pdf_report(df, location, chart_figure):
-    img_buffer = io.BytesIO()
-    chart_figure.savefig(img_buffer, format='PNG')
-    img_buffer.seek(0)
     img_path = "chart_temp.png"
     with open(img_path, "wb") as f:
-        f.write(img_buffer.read())
+        f.write(chart_figure)
 
     pdf = FPDF()
     pdf.add_page()
     pdf.set_font("Arial", size=12)
     pdf.cell(200, 10, txt=f"Otto Dörner Forecast Report - {location}", ln=True, align='C')
     pdf.ln(10)
-    pdf.image(img_buffer, w=180)
+    pdf.image(img_path, w=180)
     pdf.ln(5)
     pdf.set_font("Arial", 'B', size=10)
     for col in ["date"] + container_selected:

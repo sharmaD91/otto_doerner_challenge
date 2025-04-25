@@ -10,12 +10,17 @@ import holidays
 import re
 
 class OttoForecaster:
-    def __init__(self, model_type="random_forest"):
+    def __init__(self, model_type="xgboost"):
         self.model_type = model_type
         self.model = None
         self.label_encoder = None
         self.all_containers = None
         self.difference_flag = False
+
+    def set_model_type(self, model_type: str):
+        if model_type not in ["xgboost", "random_forest"]:
+            raise ValueError("Invalid model type. Choose 'random_forest' or 'xgboost'.")
+        self.model_type = model_type
 
     def load_and_prepare_data(self, files):
         try:
@@ -95,9 +100,9 @@ class OttoForecaster:
         X_train, X_test, y_train, y_test = train_test_split(X, y, shuffle=False, test_size=0.1)
 
         if self.model_type == "random_forest":
-            self.model = MultiOutputRegressor(RandomForestRegressor(n_estimators=100, random_state=42))
+            self.model = MultiOutputRegressor(RandomForestRegressor(n_estimators=100, random_state=42,n_jobs=-1))
         elif self.model_type == "xgboost":
-            self.model = MultiOutputRegressor(XGBRegressor(n_estimators=100, learning_rate=0.1))
+            self.model = MultiOutputRegressor(XGBRegressor(n_estimators=100, learning_rate=0.1,n_jobs=4))
         else:
             raise ValueError("Invalid model type. Choose 'random_forest' or 'xgboost'.")
         self.model.fit(X_train, y_train)
